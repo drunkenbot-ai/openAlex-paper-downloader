@@ -23,6 +23,20 @@ _MULTI_SPACE_RE = re.compile(r"[ \t]{2,}")
 _HYPHEN_LINEBREAK_RE = re.compile(r"(?<=[A-Za-z])-\n(?=[a-z])")
 _HYPHEN_SPACE_RE = re.compile(r"\b([a-z]{4,})-\s+([a-z]{2,})\b")
 
+# Some layouts (e.g. Nature) place a "Received:/Accepted:/Published
+# online:" submission-history block plus numbered author affiliations
+# in a side column that PDF text extraction interleaves into the main
+# column's paragraph, rather than as lines of their own. That makes it
+# invisible to line-level filters, so it is matched and removed as a
+# single span of raw text instead, bounded by its two clearest anchors:
+# the "Received:" marker and the email address that closes the
+# affiliation list.
+_INLINE_SUBMISSION_METADATA_RE = re.compile(
+    r"\bReceived:\s*\d{1,2}\s+\w+\s+\d{4}\b.{0,1500}?"
+    r"[\w.+-]+@[\w-]+\.[\w.-]+",
+    re.DOTALL,
+)
+
 
 def normalize_unicode(text: str) -> str:
     """Normalize Unicode form and strip invisible/control characters.
@@ -102,6 +116,20 @@ def join_wrapped_lines(lines: list[str]) -> list[str]:
         result[-1] = f"{result[-1]} {line}"
 
     return result
+
+
+def strip_inline_submission_metadata(text: str) -> str:
+    """Remove an embedded Received/Accepted/affiliations/email span.
+
+    Args:
+        text: Full document text, already paragraph-joined.
+
+    Returns:
+        Text with the first matching submission-metadata span removed.
+        Bounded to a 1500-character span so a missing/odd email address
+        elsewhere in the document can't cause runaway deletion.
+    """
+    return _INLINE_SUBMISSION_METADATA_RE.sub(" ", text)
 
 
 def collapse_blank_lines(text: str) -> str:

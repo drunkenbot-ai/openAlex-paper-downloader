@@ -3,42 +3,48 @@
 Single PySide6 app combining OpenAlex download + paper_cleaner cleaning.
 
 ## Install
-    pip install pymupdf PySide6 requests Pillow
+    pip install -r requirements.txt
 
 ## Run
-    cd paper_app_project
     python -m paper_app
 
-## What's new in this version
+## Find & Replace fixes (this version)
 
-### Taskbar icon (Windows), take two
-AUMID was already being set (confirmed) — the extra fix here is that
-Windows' taskbar needs an .ico with several embedded resolutions to
-render reliably; a single-res PNG often shows blank there even though
-it's fine in the title bar. On top of that, `main.py` now also sends
-`WM_SETICON` directly to the native window handle via `ctypes` right
-after `show()`, as a stronger fallback in case Qt's own icon
-propagation doesn't take on a given Windows setup. If it's *still* not
-showing after this, the only 100%-guaranteed route left is packaging
-with PyInstaller (`--icon app_icon.ico`), since a bundled `.exe` carries
-its icon natively — happy to set that up if needed.
+Three real bugs, fixed:
 
-### Clean tab redesign — three panels
-The Clean tab is now a three-way split (`QSplitter`):
-- **Left** (`pdf_list_panel.py`) — pick a folder, see every `*.pdf` in it.
-- **Middle** (`pdf_preview_panel.py`) — renders the raw PDF via `QtPdf`/`QtPdfWidgets`.
-- **Right** (`cleaned_preview_panel.py`) — runs the cleaning pipeline on
-  the selected PDF in a background thread (`single_clean_worker.py`) and
-  shows the cleaned text, word/garbage stats, and pass/reject verdict.
-
-Selecting a PDF on the left instantly refreshes both preview panels.
-Cleaning thresholds (min chars/words, garbage ratio, etc.) moved into a
-"Settings…" dialog (`clean_settings_dialog.py`) to keep the three panels
-front and center; a "Start Cleaning (batch)" button still runs the full
-folder through the same pipeline as before.
+1. **Dialog was blocking everything.** It's now opened with `.show()`
+   instead of `.exec()`, so it's non-modal — you can click back into the
+   main window, select text in the cleaned preview, and keep the dialog
+   open at the same time.
+2. **Selecting/searching text found nothing.** Two causes:
+   - The dialog defaulted to **regex mode**, so plain prose containing
+     `.`, `(`, `+`, etc. silently failed to match as literal text. It now
+     defaults to **plain-text mode** (regex is still available via the
+     "Use regex" checkbox).
+   - The target `.txt` file frequently didn't exist yet — the preview
+     panel only cleaned text *in memory*, it never wrote it to the output
+     folder unless you'd run the full batch "Start Cleaning". **Every
+     valid preview is now auto-saved** to the output folder the moment
+     it finishes cleaning, so Find & Replace always has something to
+     search once you've selected a document. A new **"Use Selection"**
+     button also lets you highlight text in the cleaned preview and pull
+     it straight into the Find field instead of retyping it.
+3. **No visibility in the Logs tab.** Every Find & Replace action
+   (preview run, per-file match/replacement counts, errors, final tally)
+   now also gets pushed to the app's main Logs tab, prefixed
+   `Find & Replace:`, alongside the dialog's own local log.
 
 ## Previous features
-- Logs tab with full-height, timestamped (`dd-mm-yy-hh-mm`), red-on-failure log lines.
+- Regex/plain-text search & replace across cleaned documents, scoped to
+  one document or all of them, with a dry-run preview before saving.
+- Cross-platform PyInstaller builds via `.github/workflows/build.yml`
+  (Windows/macOS/Linux, auto-attaches to GitHub Releases on version tags).
+- Taskbar icon on Windows: AppUserModelID, multi-resolution `.ico`, and a
+  direct `WM_SETICON` WinAPI fallback.
+- Clean tab: three-way split — PDF list | raw PDF preview | cleaned-text
+  preview (background-threaded), with a Settings dialog for cleaning
+  thresholds and a batch "Start Cleaning" button.
+- Logs tab: full-height, timestamped (`dd-mm-yy-hh-mm`), red-on-failure log lines.
 - Search terms: add new ones permanently (persisted via QSettings, checked on load).
 - API key remembered across launches.
 
@@ -52,16 +58,25 @@ under `~/.config` on Linux — no extra setup needed on any platform.
   persistence, and the `run_download()` orchestrator.
 - `paper_app/settings.py` — QSettings-backed persistence (API key, custom search terms).
 - `paper_app/download_tab.py` — Download tab UI.
-- `paper_app/clean_tab.py` — Clean tab: toolbar + 3-panel splitter.
+- `paper_app/clean_tab.py` — Clean tab: toolbar + 3-panel splitter, owns
+  the auto-save-on-valid-preview logic and forwards a `log_message`
+  signal up to the main Logs tab.
 - `paper_app/pdf_list_panel.py` — left panel (PDF list).
 - `paper_app/pdf_preview_panel.py` — middle panel (raw PDF viewer).
-- `paper_app/cleaned_preview_panel.py` — right panel (cleaned text viewer).
+- `paper_app/cleaned_preview_panel.py` — right panel (cleaned text
+  viewer); emits `cleaned_ready(pdf_path, result)` and exposes
+  `selected_text()` for the "Use Selection" button.
 - `paper_app/single_clean_worker.py` — background thread for one-PDF preview cleaning.
 - `paper_app/clean_settings_dialog.py` — dialog exposing every CleanConfig field.
+- `paper_app/text_replace.py` — regex/plain-text find-replace core logic.
+- `paper_app/find_replace_worker.py` — background thread for bulk find/replace.
+- `paper_app/find_replace_dialog.py` — non-modal Find & Replace dialog UI.
 - `paper_app/logs_tab.py` — full-height, timestamped, colorized log panel.
 - `paper_app/search_terms_widget.py` — checklist with add / Select All / Select None.
-- `paper_app/assets/app_icon.png`, `app_icon.ico` — the DrunkenBot app icon.
+- `paper_app/assets/` — `app_icon.png`, `app_icon.ico`, `app_icon.icns`.
 - `paper_app/workers.py`, `main_window.py`, `main.py` — QThread workers,
   the combined window (Download / Clean / Logs tabs), and entry point
-  (AppUserModelID + app/window/native icon handling).
+  (AppUserModelID + app/window/native icon handling, frozen-path fixes).
 - `paper_cleaner/` — unchanged cleaning pipeline package.
+- `build.spec` — PyInstaller spec (per-OS icon, includes `paper_app/assets`).
+- `.github/workflows/build.yml` — CI build for Windows/macOS/Linux.

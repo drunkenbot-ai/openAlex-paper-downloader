@@ -42,6 +42,7 @@ class MainWindow(QMainWindow):
 
         self._download_tab.run_button.clicked.connect(self._start_download)
         self._clean_tab.run_button.clicked.connect(self._start_clean)
+        self._clean_tab.log_message.connect(self._log_line)
 
     def _log_line(self, text: str) -> None:
         """Append one timestamped line to the Logs tab.

@@ -13,6 +13,7 @@ from paper_cleaner.text_utils import (
     join_wrapped_lines,
     normalize_unicode,
     repair_hyphenation,
+    strip_inline_submission_metadata,
 )
 
 
@@ -70,7 +71,9 @@ def clean_pages(
         counts.references = removed
 
     lines = join_wrapped_lines(lines)
-    text = collapse_blank_lines(repair_hyphenation("\n".join(lines)))
+    text = repair_hyphenation("\n".join(lines))
+    text = strip_inline_submission_metadata(text)
+    text = collapse_blank_lines(text)
 
     stats = quality.calculate_statistics(text)
     reasons = quality.validate(stats, config)

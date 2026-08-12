@@ -6,7 +6,24 @@ import sys
 from pathlib import Path
 
 _APP_USER_MODEL_ID = "DrunkenBot.PaperCorpusBuilder.GUI.1"
-_ASSETS_DIR = Path(__file__).parent / "assets"
+
+
+def _assets_dir() -> Path:
+    """Return the folder ``app_icon.*`` lives in, in source or frozen builds.
+
+    PyInstaller extracts bundled data files to a temp folder exposed as
+    ``sys._MEIPASS``; a plain ``python -m paper_app`` run instead resolves
+    the assets folder relative to this file.
+
+    Returns:
+        The folder containing the app icon files.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS")) / "paper_app" / "assets"
+    return Path(__file__).parent / "assets"
+
+
+_ASSETS_DIR = _assets_dir()
 # .ico carries multiple embedded resolutions, which Windows' taskbar and
 # Alt-Tab switcher need to render a crisp icon; a single-resolution .png
 # is fine for the title bar but often shows blank/blurry on the taskbar.
