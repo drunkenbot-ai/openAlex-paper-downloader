@@ -90,15 +90,15 @@ jobs:
           path: PaperCorpusBuilder-macos.zip
 
   release:
-    name: Attach builds to GitHub Release
+    name: Publish GitHub Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Download all build artifacts
         uses: actions/download-artifact@v7
         with:
           path: artifacts
+          merge-multiple: true
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
