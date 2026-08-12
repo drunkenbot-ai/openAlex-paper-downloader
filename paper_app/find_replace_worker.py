@@ -62,7 +62,7 @@ class FindReplaceWorker(QThread):
                     text, compiled, self._replace_text, self._use_regex
                 )
                 if count:
-                    path.write_text(new_text, encoding="utf-8")
+                    path.write_text(new_text, encoding="utf-8", newline="\n")
                     files_changed += 1
                     total_replacements += count
                 self.file_done.emit(path.name, count)

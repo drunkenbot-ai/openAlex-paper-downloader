@@ -156,7 +156,9 @@ class CleanTab(QWidget):
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
             output_path = output_dir / f"{pdf_path.stem}.txt"
-            output_path.write_text(result.text, encoding="utf-8")
+            # newline="\n" avoids CRLF creeping in on Windows; see the
+            # matching fix in paper_cleaner.pipeline.process_pdf.
+            output_path.write_text(result.text, encoding="utf-8", newline="\n")
             self.log_message.emit(
                 f"Saved cleaned preview: {output_path.name} ({result.stats.words} words)"
             )

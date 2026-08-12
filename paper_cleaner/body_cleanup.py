@@ -85,10 +85,21 @@ def remove_noise_lines(lines: list[str]) -> tuple[list[str], CleanupCounts]:
         if lf.is_license_line(line):
             counts.publisher_metadata += 1
             continue
+        if lf.is_page_number(line):
+            # A bare page number (e.g. "27") is unique per page, so it
+            # never repeats across pages and headers_footers.py never
+            # catches it. Left in place, join_wrapped_lines glues it
+            # onto the end of whatever paragraph happens to precede it
+            # (e.g. "...Baton Rouge, LA 70813, USA 27").
+            counts.other_noise += 1
+            continue
         if lf.is_graphical_garbage(line):
             counts.graphics += 1
             continue
-        if lf.looks_like_author_list(line):
+        if lf.is_citation_cluster(line):
+            counts.other_noise += 1
+            continue
+        if lf.looks_like_author_list(line) or lf.looks_like_numbered_affiliation_line(line):
             counts.author_blocks += 1
             continue
         result.append(line)

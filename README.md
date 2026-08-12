@@ -8,75 +8,76 @@ Single PySide6 app combining OpenAlex download + paper_cleaner cleaning.
 ## Run
     python -m paper_app
 
-## Find & Replace fixes (this version)
+## Cleaning-pipeline fix: citation-cluster table remnants (this update)
 
-Three real bugs, fixed:
+Reviewed 6 more real cleaned `.txt` samples and found lines like:
+```
+[8], [9], [15], [21], [31], [32], [34], [35] , [22], [26], [62], [63], ...
+```
+These are the "Related work"/"Refs" column of a table (e.g. a survey
+paper's "summary of attention categories" table), which PDF text
+extraction flattens into a standalone line with no surrounding prose —
+since text extraction has no concept of table cells or columns.
 
-1. **Dialog was blocking everything.** It's now opened with `.show()`
-   instead of `.exec()`, so it's non-modal — you can click back into the
-   main window, select text in the cleaned preview, and keep the dialog
-   open at the same time.
-2. **Selecting/searching text found nothing.** Two causes:
-   - The dialog defaulted to **regex mode**, so plain prose containing
-     `.`, `(`, `+`, etc. silently failed to match as literal text. It now
-     defaults to **plain-text mode** (regex is still available via the
-     "Use regex" checkbox).
-   - The target `.txt` file frequently didn't exist yet — the preview
-     panel only cleaned text *in memory*, it never wrote it to the output
-     folder unless you'd run the full batch "Start Cleaning". **Every
-     valid preview is now auto-saved** to the output folder the moment
-     it finishes cleaning, so Find & Replace always has something to
-     search once you've selected a document. A new **"Use Selection"**
-     button also lets you highlight text in the cleaned preview and pull
-     it straight into the Find field instead of retyping it.
-3. **No visibility in the Logs tab.** Every Find & Replace action
-   (preview run, per-file match/replacement counts, errors, final tally)
-   now also gets pushed to the app's main Logs tab, prefixed
-   `Find & Replace:`, alongside the dialog's own local log.
+New `line_filters.is_citation_cluster()` detects lines dominated by
+`[n]`-style citation markers: it strips every marker out and checks
+whether anything meaningful is left. A real sentence like
+`"SGD [181] and Adam [182] are well-suited for optimizing..."` still has
+plenty of prose left after that strip and is correctly left alone;
+`"[8], [9], [15], ..."` with nothing else does not, and gets dropped.
+Verified against 8 real/synthetic cases (4 should-strip, 4 should-keep)
+and a full `remove_noise_lines` run confirming the surrounding real
+table-row descriptions (which *are* legitimate sentences) survive intact.
+
+## CI workflow fixes (previous update)
+- `actions/checkout@v4` → `@v5`, `actions/setup-python@v5` → `@v6`,
+  `actions/upload-artifact@v4` → `@v6`, `actions/download-artifact@v4` → `@v7`
+  (all now Node-24-native, clearing the deprecation warnings).
+- "Attach builds to GitHub Release" only runs on version tags
+  (`refs/tags/v*`) — showing as skipped on a plain push to `main` is
+  expected, not a bug.
+
+## Cleaning-pipeline fixes (previous update)
+1. **Stray page numbers glued onto paragraphs** — `body_cleanup` now
+   actually drops lines matching `is_page_number()` instead of only
+   excluding them from header/footer repetition counting.
+2. **Huge numbered-affiliation blocks** (LIGO/Virgo-style, e.g.
+   `"13Nikhef, ... 14LIGO, ..."`) — new
+   `looks_like_numbered_affiliation_line()` catches the fused-token
+   pattern before `join_wrapped_lines` can merge survivors into one
+   giant paragraph.
+3. **CRLF instead of LF** in every output file — every write site now
+   passes `newline="\n"`.
+
+**Known, not fixed:** corrupted math/symbol glyphs from the original
+PDF's equation font encoding — extraction-time information loss, not
+safely repairable via text filters.
+
+## Find & Replace fixes (previous update)
+1. Dialog is non-modal (`.show()` not `.exec()`).
+2. Defaults to plain-text search; "Use Selection" button added.
+3. Every valid preview auto-saves to the output folder; all actions log
+   to the main Logs tab.
 
 ## Previous features
-- Regex/plain-text search & replace across cleaned documents, scoped to
-  one document or all of them, with a dry-run preview before saving.
-- Cross-platform PyInstaller builds via `.github/workflows/build.yml`
-  (Windows/macOS/Linux, auto-attaches to GitHub Releases on version tags).
+- Regex/plain-text search & replace across cleaned documents.
+- Cross-platform PyInstaller builds via `.github/workflows/build.yml`,
+  auto-attaches to GitHub Releases on version tags.
 - Taskbar icon on Windows: AppUserModelID, multi-resolution `.ico`, and a
   direct `WM_SETICON` WinAPI fallback.
 - Clean tab: three-way split — PDF list | raw PDF preview | cleaned-text
-  preview (background-threaded), with a Settings dialog for cleaning
-  thresholds and a batch "Start Cleaning" button.
+  preview, with a Settings dialog and a batch "Start Cleaning" button.
 - Logs tab: full-height, timestamped (`dd-mm-yy-hh-mm`), red-on-failure log lines.
-- Search terms: add new ones permanently (persisted via QSettings, checked on load).
+- Search terms: add new ones permanently (persisted via QSettings).
 - API key remembered across launches.
 
-Settings are stored via `QSettings("DrunkenBot", "PaperCorpusBuilder")`,
-which resolves to the Windows registry, a macOS plist, or an INI file
-under `~/.config` on Linux — no extra setup needed on any platform.
+Settings are stored via `QSettings("DrunkenBot", "PaperCorpusBuilder")`.
 
 ## Layout
-- `paper_app/downloader/` — download config, OpenAlex client,
-  metadata/license/filter logic, per-paper download logic, state/JSONL
-  persistence, and the `run_download()` orchestrator.
-- `paper_app/settings.py` — QSettings-backed persistence (API key, custom search terms).
-- `paper_app/download_tab.py` — Download tab UI.
-- `paper_app/clean_tab.py` — Clean tab: toolbar + 3-panel splitter, owns
-  the auto-save-on-valid-preview logic and forwards a `log_message`
-  signal up to the main Logs tab.
-- `paper_app/pdf_list_panel.py` — left panel (PDF list).
-- `paper_app/pdf_preview_panel.py` — middle panel (raw PDF viewer).
-- `paper_app/cleaned_preview_panel.py` — right panel (cleaned text
-  viewer); emits `cleaned_ready(pdf_path, result)` and exposes
-  `selected_text()` for the "Use Selection" button.
-- `paper_app/single_clean_worker.py` — background thread for one-PDF preview cleaning.
-- `paper_app/clean_settings_dialog.py` — dialog exposing every CleanConfig field.
-- `paper_app/text_replace.py` — regex/plain-text find-replace core logic.
-- `paper_app/find_replace_worker.py` — background thread for bulk find/replace.
-- `paper_app/find_replace_dialog.py` — non-modal Find & Replace dialog UI.
-- `paper_app/logs_tab.py` — full-height, timestamped, colorized log panel.
-- `paper_app/search_terms_widget.py` — checklist with add / Select All / Select None.
-- `paper_app/assets/` — `app_icon.png`, `app_icon.ico`, `app_icon.icns`.
-- `paper_app/workers.py`, `main_window.py`, `main.py` — QThread workers,
-  the combined window (Download / Clean / Logs tabs), and entry point
-  (AppUserModelID + app/window/native icon handling, frozen-path fixes).
-- `paper_cleaner/` — unchanged cleaning pipeline package.
-- `build.spec` — PyInstaller spec (per-OS icon, includes `paper_app/assets`).
-- `.github/workflows/build.yml` — CI build for Windows/macOS/Linux.
+- `paper_cleaner/` — cleaning pipeline. `line_filters.py` now includes
+  `is_citation_cluster()` alongside `looks_like_numbered_affiliation_line()`;
+  `body_cleanup.py` strips both, plus bare page numbers; `pipeline.py`
+  writes with `newline="\n"`.
+- `paper_app/` — the GUI (downloader, Clean tab 3-panel splitter, Find &
+  Replace, Logs tab, settings persistence, icon/taskbar handling).
+- `build.spec`, `.github/workflows/build.yml` — cross-platform PyInstaller CI.

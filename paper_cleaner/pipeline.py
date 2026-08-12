@@ -106,6 +106,10 @@ def process_pdf(
     if result.valid:
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{pdf_path.stem}.txt"
-        output_path.write_text(result.text, encoding="utf-8")
+        # newline="\n" pins the on-disk line ending to LF regardless of
+        # OS. Without it, Path.write_text() applies the platform default
+        # (CRLF on Windows), so identical input produces different
+        # bytes-on-disk depending who runs the pipeline.
+        output_path.write_text(result.text, encoding="utf-8", newline="\n")
 
     return result

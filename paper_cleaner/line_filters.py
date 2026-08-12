@@ -19,6 +19,16 @@ _PDF_ARTIFACT_SUBSTRINGS = (
 
 _GRAPHICAL_CHARS = set("Gg\u2022\u00b7\u25cf\u25cb|")
 
+# Tables that list citations per row/category (e.g. a "Related work"
+# column) get flattened by PDF text extraction into standalone lines
+# with no surrounding prose, since text extraction has no concept of
+# table cells. A line dominated by "[8], [9], [15], ..." citation
+# markers, once the markers themselves are stripped away, leaves
+# essentially nothing behind — unlike a real sentence such as
+# "SGD [181] and Adam [182] are well-suited...", which still has plenty
+# of prose left after the same strip.
+_CITATION_MARKER_RE = re.compile(r"\[\d{1,4}(?:[-\u2013,]\s*\d{1,4})*\]")
+
 _PUBLISHER_METADATA_PATTERNS = (
     "version of record", "accepted manuscript", "accepted version",
     "author manuscript", "publisher's pdf", "publisher pdf",
@@ -56,6 +66,15 @@ _AUTHOR_NAME_RE = re.compile(
     r"\b[A-Z][a-zA-Z\u00c0-\u00ff]+(?:\s+[A-Z]\.)?"
     r"(?:\s+[A-Z][a-zA-Z\u00c0-\u00ff]+){1,2}\b"
 )
+
+# Large-collaboration papers (LIGO/Virgo-style) list dozens to hundreds of
+# affiliations as "<index><Institution>, <City>, <Country>" tokens. PDF
+# extraction often fuses several of these per raw line with no space
+# between the index and the institution name (e.g. "125NCBJ, 05-400
+# Swierk-Otwock, Poland 126Institute of Mathematics..."). This pattern
+# almost never occurs in ordinary prose, so it is a reliable signal even
+# before :func:`looks_like_author_list`'s person-name heuristic applies.
+_NUMBERED_AFFILIATION_RE = re.compile(r"(?:\A|\s)\d{1,3}[A-Z][a-zA-Z]")
 
 
 def is_page_number(line: str) -> bool:
@@ -96,6 +115,32 @@ def is_graphical_garbage(line: str) -> bool:
     if len(compact) >= 8 and set(compact) <= _GRAPHICAL_CHARS:
         return True
     return bool(re.fullmatch(r"[-_=~\u2022\u00b7.]+", stripped))
+
+
+def is_citation_cluster(line: str) -> bool:
+    """Return True if ``line`` is just a run of bracketed citation markers.
+
+    Detects flattened table cells (typically a "Related work"/"Refs"
+    column) that PDF text extraction turns into a standalone line of
+    ``"[8], [9], [15], ..."`` with no actual sentence around it. Real
+    prose with inline citations, such as ``"SGD [181] and Adam [182]
+    are well-suited..."``, still has substantial text left after the
+    citation markers are stripped out and is not flagged.
+
+    Args:
+        line: A single, already-normalized line of text.
+
+    Returns:
+        True if the line is citation markers and little else.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if len(_CITATION_MARKER_RE.findall(stripped)) < 2:
+        return False
+    remainder = _CITATION_MARKER_RE.sub("", stripped)
+    remainder = re.sub(r"[,;:.\s]+", "", remainder)
+    return len(remainder) <= 2
 
 
 def is_url_or_doi(line: str) -> bool:
@@ -161,3 +206,35 @@ def looks_like_author_list(line: str) -> bool:
     if names >= 6 and (affiliations >= 2 or separators >= 4):
         return True
     return len(stripped) > 300 and names >= 8
+
+
+def looks_like_numbered_affiliation_line(line: str) -> bool:
+    """Return True if ``line`` is a run of numbered author affiliations.
+
+    Two or more fused ``<index><Capitalized word>`` tokens (e.g.
+    ``"13Nikhef"``, ``"14LIGO"``) is treated as noise outright. A single
+    such token is only treated as noise if the rest of the line still
+    looks like an affiliation (short, and containing a comma or a known
+    affiliation keyword), so a line that merely starts with a number
+    (e.g. a numbered list item in the article body) is not misclassified.
+
+    Args:
+        line: A single, already-normalized line of text.
+
+    Returns:
+        True if the line is (or starts) a numbered affiliation block.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+
+    matches = _NUMBERED_AFFILIATION_RE.findall(stripped)
+    if len(matches) >= 2:
+        return True
+
+    starts_with_index = bool(re.match(r"\A\d{1,3}[A-Z][a-zA-Z]", stripped))
+    if len(matches) == 1 and starts_with_index:
+        return len(stripped) < 250 and (
+            "," in stripped or affiliation_score(stripped) >= 1
+        )
+    return False
