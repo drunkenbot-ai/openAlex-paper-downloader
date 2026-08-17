@@ -74,7 +74,34 @@ _AUTHOR_NAME_RE = re.compile(
 # Swierk-Otwock, Poland 126Institute of Mathematics..."). This pattern
 # almost never occurs in ordinary prose, so it is a reliable signal even
 # before :func:`looks_like_author_list`'s person-name heuristic applies.
-_NUMBERED_AFFILIATION_RE = re.compile(r"(?:\A|\s)\d{1,3}[A-Z][a-zA-Z]")
+#
+# Two constraints keep this from matching common scientific shorthand
+# that has the same "digit immediately followed by capital letter"
+# shape: generation/dimension tags ("5G", "6G", "2D", "3D") and isotope
+# notation ("16O", "56Ni") are always exactly one or two letters long,
+# so requiring at least 3 letters (`[A-Z][a-zA-Z]{2,}`) excludes them
+# while still matching real institution names and acronyms ("14LIGO",
+# "13Nikhef", "125NCBJ"). The trailing `(?=[,\s]|\Z)` boundary further
+# excludes grant/award codes ("18KK0090", "80NSSC20K0527"), which keep
+# fusing on more digits instead of ending at a comma/space/end.
+_NUMBERED_AFFILIATION_RE = re.compile(r"(?:\A|\s)\d{1,3}[A-Z][a-zA-Z]{2,}(?=[,\s]|\Z)")
+
+# Some collaboration papers (SDSS-style, as opposed to LIGO/Virgo-style)
+# render numbered affiliations with a space between the index and the
+# institution name ("66 AURA Observatory in Chile, ...") instead of
+# fusing them ("66AURA..."). That shape alone is indistinguishable from
+# numbered section headings ("1 Introduction"), footnotes ("84 See
+# https://..."), or equations ("0 Ez = 0,"), all of which also start
+# with "<digit(s)> <Capital letter>". It is only treated as reliable
+# once corroborated by a genuine institution keyword via
+# :func:`affiliation_score`.
+_INDEXED_LINE_START_RE = re.compile(r"\A\d{1,3}\s+[A-Z][a-zA-Z]")
+
+# Common math/notation symbols. Real affiliation address lines never
+# contain these, but stray equation fragments (subscripts, deltas,
+# summations) can otherwise slip past the single-token branch's comma
+# check.
+_MATH_SYMBOLS = set("∆Σ∈×±√∇∂∞≈≤≥∑∏∫")
 
 
 def is_page_number(line: str) -> bool:
@@ -212,11 +239,20 @@ def looks_like_numbered_affiliation_line(line: str) -> bool:
     """Return True if ``line`` is a run of numbered author affiliations.
 
     Two or more fused ``<index><Capitalized word>`` tokens (e.g.
-    ``"13Nikhef"``, ``"14LIGO"``) is treated as noise outright. A single
-    such token is only treated as noise if the rest of the line still
-    looks like an affiliation (short, and containing a comma or a known
-    affiliation keyword), so a line that merely starts with a number
-    (e.g. a numbered list item in the article body) is not misclassified.
+    ``"13Nikhef"``, ``"14LIGO"``) is a starting signal, but on its own it
+    is not reliable enough: common scientific shorthand like "5G", "6G",
+    "2D", "3D", or isotope notation like "16O" is exactly the same shape
+    (digit immediately followed by a capitalized letter) and appears
+    constantly in ordinary technical prose. A line is only treated as
+    affiliation noise if it *also* carries a corroborating signal that
+    real affiliation entries have and shorthand tokens don't: a known
+    institution keyword (university, institute, department, ...) or a
+    dense run of address-style commas.
+
+    A single fused token is only treated as noise if it opens the line
+    and the rest still looks like an affiliation (short, and containing
+    a comma or a known affiliation keyword), so a line that merely
+    starts with a number (e.g. a numbered list item) is not misclassified.
 
     Args:
         line: A single, already-normalized line of text.
@@ -230,11 +266,57 @@ def looks_like_numbered_affiliation_line(line: str) -> bool:
 
     matches = _NUMBERED_AFFILIATION_RE.findall(stripped)
     if len(matches) >= 2:
-        return True
+        # Comma count alone is not a safe signal here: an ordinary
+        # multi-sentence paragraph can easily rack up 3+ commas without
+        # being anything like an address list. A known institution
+        # keyword is far more specific to genuine affiliations, and the
+        # length cap guards against a long paragraph that happens to
+        # contain two unrelated digit+capital tokens far apart.
+        return affiliation_score(stripped) >= 1 and len(stripped) <= 500
 
-    starts_with_index = bool(re.match(r"\A\d{1,3}[A-Z][a-zA-Z]", stripped))
+    starts_with_index = bool(
+        re.match(r"\A\d{1,3}[A-Z][a-zA-Z]{2,}(?=[,\s]|\Z)", stripped)
+    )
     if len(matches) == 1 and starts_with_index:
+        # Equations that happen to start with a subscript-shaped token
+        # (e.g. "2S +2 X j=1 ∆i jWj, (97)") can still slip past a bare
+        # comma check, so also require the line be free of common math
+        # notation symbols before trusting the comma as a real address
+        # separator.
+        if any(symbol in stripped for symbol in _MATH_SYMBOLS):
+            return False
         return len(stripped) < 250 and (
             "," in stripped or affiliation_score(stripped) >= 1
         )
     return False
+
+
+def looks_like_indexed_affiliation_line(line: str) -> bool:
+    """Return True if ``line`` opens with "<index> <Institution...>".
+
+    Catches the space-separated numbered-affiliation format (e.g. "66
+    AURA Observatory in Chile, ...") that
+    :func:`looks_like_numbered_affiliation_line` doesn't, since that one
+    only matches indices *fused* directly onto the institution name with
+    no space. Because "<digit(s)> <Capitalized word>" alone is also the
+    shape of numbered section headings, footnotes, and equations, this
+    additionally requires a genuine institution keyword and a modest
+    length cap before treating the line as noise.
+
+    Args:
+        line: A single, already-normalized line of text.
+
+    Returns:
+        True if the line looks like a numbered, space-separated
+        affiliation entry.
+    """
+    stripped = line.strip()
+    if not stripped or not _INDEXED_LINE_START_RE.match(stripped):
+        return False
+    if "http://" in stripped or "https://" in stripped:
+        # A URL substring can coincidentally contain an affiliation
+        # keyword (e.g. ".../nyc-cityschools/..." contains "school"),
+        # but a genuine affiliation address line never itself contains
+        # a URL — that shape belongs to a numbered footnote instead.
+        return False
+    return affiliation_score(stripped) >= 1 and len(stripped) <= 300

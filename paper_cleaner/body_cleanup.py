@@ -102,6 +102,9 @@ def remove_noise_lines(lines: list[str]) -> tuple[list[str], CleanupCounts]:
         if lf.looks_like_author_list(line) or lf.looks_like_numbered_affiliation_line(line):
             counts.author_blocks += 1
             continue
+        if lf.looks_like_indexed_affiliation_line(line):
+            counts.author_blocks += 1
+            continue
         result.append(line)
 
     return result, counts

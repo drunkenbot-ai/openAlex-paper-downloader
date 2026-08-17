@@ -8,56 +8,95 @@ Single PySide6 app combining OpenAlex download + paper_cleaner cleaning.
 ## Run
     python -m paper_app
 
-## Cleaning-pipeline fix: citation-cluster table remnants (this update)
+## Cleaning-pipeline fix: matrix/bracket-extension soup (this update)
 
-Reviewed 6 more real cleaned `.txt` samples and found lines like:
-```
-[8], [9], [15], [21], [31], [32], [34], [35] , [22], [26], [62], [63], ...
-```
-These are the "Related work"/"Refs" column of a table (e.g. a survey
-paper's "summary of attention categories" table), which PDF text
-extraction flattens into a standalone line with no surrounding prose —
-since text extraction has no concept of table cells or columns.
+The user flagged a worrying passage: a matrix equation from a real
+astrophysics paper (Riess et al.-style SN Ia/Cepheid calibration) that
+had been flattened into unreadable symbol soup —
+`"⎛ ⎝ ⎜ ⎜ ⎜ ... ⎞ ⎠ ⎟ ⎟ ⎟ ... ⎫ ⎬⎭"`.
 
-New `line_filters.is_citation_cluster()` detects lines dominated by
-`[n]`-style citation markers: it strips every marker out and checks
-whether anything meaningful is left. A real sentence like
-`"SGD [181] and Adam [182] are well-suited for optimizing..."` still has
-plenty of prose left after that strip and is correctly left alone;
-`"[8], [9], [15], ..."` with nothing else does not, and gets dropped.
-Verified against 8 real/synthetic cases (4 should-strip, 4 should-keep)
-and a full `remove_noise_lines` run confirming the surrounding real
-table-row descriptions (which *are* legitimate sentences) survive intact.
+### Root cause
+These are legitimate Unicode "bracket extension piece" characters
+(U+239B–U+23B1, Miscellaneous Technical block) that PDF typesetting uses
+to draw tall, multi-row parenthesis/bracket/brace delimiters around
+matrices and piecewise-function definitions. They only have meaning
+given the original 2D layout; once PDF text extraction flattens
+everything to linear text, the row/column structure is gone and only
+meaningless bracket-piece soup remains. This is the same fundamental
+"extraction destroys equation structure" issue documented as a known
+limitation earlier, but this specific manifestation is common and
+detectable enough to safely fix.
 
-## CI workflow fixes (previous update)
-- `actions/checkout@v4` → `@v5`, `actions/setup-python@v5` → `@v6`,
-  `actions/upload-artifact@v4` → `@v6`, `actions/download-artifact@v4` → `@v7`
-  (all now Node-24-native, clearing the deprecation warnings).
-- "Attach builds to GitHub Release" only runs on version tags
-  (`refs/tags/v*`) — showing as skipped on a plain push to `main` is
-  expected, not a bug.
+A second, related pattern was also found: some math fonts map the same
+kind of bracket/brace pieces into the Private Use Area instead
+(`"V (φ) = \uf8f1\uf8f4\uf8f2\uf8f4\uf8f3 V0 ..."`) — same problem,
+different codepoint range.
 
-## Cleaning-pipeline fixes (previous update)
-1. **Stray page numbers glued onto paragraphs** — `body_cleanup` now
-   actually drops lines matching `is_page_number()` instead of only
-   excluding them from header/footer repetition counting.
-2. **Huge numbered-affiliation blocks** (LIGO/Virgo-style, e.g.
-   `"13Nikhef, ... 14LIGO, ..."`) — new
-   `looks_like_numbered_affiliation_line()` catches the fused-token
-   pattern before `join_wrapped_lines` can merge survivors into one
-   giant paragraph.
-3. **CRLF instead of LF** in every output file — every write site now
-   passes `newline="\n"`.
+### Fix: character-level removal, not line removal
+Critically, these bracket-piece characters are very often merged by
+`join_wrapped_lines` onto the *same line* as substantial, legitimate
+prose (confirmed in one real example: a full paragraph of real
+discussion text ending with a small embedded equation fragment). A
+line-level filter would have deleted real content. Instead,
+`text_utils.normalize_unicode()` now blanks out just the bracket-piece
+characters themselves (à la the existing zero-width-character
+handling), leaving everything else on the line untouched. The resulting
+extra whitespace is cleaned up automatically by the existing
+`normalize_line()` step later in the pipeline; a line that was *purely*
+bracket soup collapses to empty and disappears via `collapse_blank_lines`.
 
-**Known, not fixed:** corrupted math/symbol glyphs from the original
-PDF's equation font encoding — extraction-time information loss, not
-safely repairable via text filters.
+**Verified:** tested against the exact flagged passage and 2 other real
+mixed prose+equation lines — real content fully preserved, bracket
+soup gone. Scanned the entire accumulated 18-file corpus: 9 files were
+affected (up to 372 stray characters in one file), all now fully
+eliminated (before/after counts confirmed per file). Re-ran the full
+`clean_pages()` pipeline end-to-end plus the complete regression suite
+for every previous fix (numbered affiliations, citation clusters,
+5G/6G false-positive avoidance) — all still passing.
 
-## Find & Replace fixes (previous update)
-1. Dialog is non-modal (`.show()` not `.exec()`).
-2. Defaults to plain-text search; "Use Selection" button added.
-3. Every valid preview auto-saves to the output folder; all actions log
-   to the main Logs tab.
+**Still a known, unfixable limitation:** the equation *content* itself
+(e.g. "v Y n s c 1 2 1 2 lm l lm l lm I lm 2 1 4 4") remains unreadable
+even after this fix, since the subscript/superscript/matrix-position
+information was already lost at extraction time — removing the bracket
+soup cleans up the visual noise but can't reconstruct the actual math.
+
+## Cleaning-pipeline fixes: two new leaks found (previous update)
+1. **Space-separated numbered affiliations** — SDSS-collaboration-style
+   ("66 AURA Observatory in Chile, ..."), as opposed to the fused
+   LIGO-style format. New `looks_like_indexed_affiliation_line()`,
+   gated on a genuine institution keyword to avoid catching numbered
+   section headings, footnotes, and equations that share the same
+   "digit + capital letter" shape.
+2. **Stray C0 control-byte characters** (`\x00`-`\x15`) embedded in
+   equations from another PDF math-font encoding quirk — stripped in
+   `normalize_unicode()`.
+
+Investigated but left alone: a dense GW-detection statistics table
+flattened into number-soup — real data, not a PDF artifact;
+`is_pdf_artifact()` is deliberately metric-only to avoid destroying
+legitimate numeric content.
+
+## Previous fix: numbered-affiliation filter was over-triggering
+A prior version had a 178-false-positive regression (ordinary
+"5G"/"6G"/"2D" prose misclassified as affiliation noise). Fixed by
+requiring 3+ letters after the digit in the fused pattern.
+
+## Cleaning-pipeline fix: citation-cluster table remnants
+`is_citation_cluster()` strips flattened table cells like
+`"[8], [9], [15], ..."` while leaving real inline citations like
+`"SGD [181] and Adam [182]..."` untouched.
+
+## CI workflow fixes
+Bumped actions to Node-24-native majors. Release tags must start with
+`v` (e.g. `v1.0.0`) to match the workflow's `refs/tags/v*` condition.
+
+## Cleaning-pipeline fixes (earlier updates)
+1. Stray page numbers glued onto paragraphs — now stripped.
+2. CRLF instead of LF in every output file — fixed with `newline="\n"`.
+
+## Find & Replace fixes
+Non-modal dialog, plain-text default search, "Use Selection" button,
+every valid preview auto-saves, all actions log to the main Logs tab.
 
 ## Previous features
 - Regex/plain-text search & replace across cleaned documents.
@@ -74,10 +113,14 @@ safely repairable via text filters.
 Settings are stored via `QSettings("DrunkenBot", "PaperCorpusBuilder")`.
 
 ## Layout
-- `paper_cleaner/` — cleaning pipeline. `line_filters.py` now includes
-  `is_citation_cluster()` alongside `looks_like_numbered_affiliation_line()`;
-  `body_cleanup.py` strips both, plus bare page numbers; `pipeline.py`
-  writes with `newline="\n"`.
+- `paper_cleaner/` — cleaning pipeline. `text_utils.py`:
+  `normalize_unicode()` now strips both Miscellaneous-Technical-block
+  and PUA-range bracket/brace-extension pieces, plus C0 control chars,
+  and writes with `newline="\n"`. `line_filters.py`:
+  `looks_like_numbered_affiliation_line()` (fused format),
+  `looks_like_indexed_affiliation_line()` (space-separated format),
+  `is_citation_cluster()`; `body_cleanup.py` strips all of these plus
+  bare page numbers.
 - `paper_app/` — the GUI (downloader, Clean tab 3-panel splitter, Find &
   Replace, Logs tab, settings persistence, icon/taskbar handling).
 - `build.spec`, `.github/workflows/build.yml` — cross-platform PyInstaller CI.
