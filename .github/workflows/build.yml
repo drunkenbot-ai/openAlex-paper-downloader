@@ -21,6 +21,7 @@ on:
       - "paper_cleaner/**"
       - "build.spec"
       - "requirements.txt"
+      - ".github/workflows/build.yml"
   workflow_dispatch: {}
 
 jobs:
@@ -32,9 +33,11 @@ jobs:
           - os: windows-latest
             artifact_name: PaperCorpusBuilder-windows
             build_path: dist/PaperCorpusBuilder.exe
+
           - os: macos-latest
             artifact_name: PaperCorpusBuilder-macos
             build_path: dist/PaperCorpusBuilder.app
+
           - os: ubuntu-latest
             artifact_name: PaperCorpusBuilder-linux
             build_path: dist/PaperCorpusBuilder
@@ -94,6 +97,10 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
     steps:
       - name: Download all build artifacts
         uses: actions/download-artifact@v7
@@ -107,3 +114,4 @@ jobs:
             artifacts/PaperCorpusBuilder-windows/*
             artifacts/PaperCorpusBuilder-macos/*
             artifacts/PaperCorpusBuilder-linux/*
+          overwrite_files: true
