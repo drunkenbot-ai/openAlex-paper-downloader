@@ -5,3 +5,4 @@ dist/
 *.spec.bak
 research-corpus/
 cleaned_text/
+*.idea
